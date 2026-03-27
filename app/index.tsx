@@ -1,26 +1,31 @@
-import React, { useState } from 'react';
-import AccountVerification from './AccountVerification';
-import CreateAccount from './CreateAccount';
-import InterestSelection from './InterestSelection';
-import TermsAndConditions from './TermsAndConditions';
+// import CreateAccount from "./CreateAccount";
 
-// Onboarding order:
-// 0 → AccountVerification
-// 1 → CreateAccount
-// 2 → InterestSelection
-// 3 → TermsAndConditions
+// export default function Index() {
+//   return <CreateAccount />;
+// }
+
+import { router } from "expo-router";
+import { Button, StyleSheet, Text, View } from "react-native";
 
 export default function Index() {
-  const [step, setStep] = useState(0);
-
-  const next = () => setStep((s) => s + 1);
-  const back = () => setStep((s) => Math.max(0, s - 1));
-
-  if (step === 0) return <AccountVerification onVerify={next} onBack={back} onResend={() => {}} />;
-  if (step === 1) return <CreateAccount onNext={next} onBack={back} />;
-  if (step === 2) return <InterestSelection onNext={next} onBack={back} />;
-  if (step === 3) return <TermsAndConditions onNext={next} onBack={back} />;
-
-  // TODO: add future onboarding pages here as step === 4, 5, etc.
-  return null;
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Longhorn Journey</Text>
+      <Button title="Enter App" onPress={() => router.push("/home")} />{" "}
+      {/* router.replace("/(tabs)/home"); once they're done with onboarding so they dont go back*/}
+    </View>
+  );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: "700",
+    marginBottom: 20,
+  },
+});
