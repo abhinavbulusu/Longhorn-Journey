@@ -1,38 +1,44 @@
 import PrimaryButton from '@/app/components/buttons/PrimaryButton';
 import TextInputField from '@/app/components/inputs/TextInputField';
 import FlowLayout from '@/app/components/layouts/FlowLayout';
+import { useOnboarding } from '@/app/context/OnboardingContext';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { View, Text, Pressable } from 'react-native';
 import InlineAlert from '@/app/components/alerts/InlineAlert';
 
-interface LoginPageProps {
-}
-
-export default function LoginPage({
-}: LoginPageProps) {
+export default function LoginPage() {
+  const router = useRouter();
+  const { update } = useOnboarding();
 
   const [fieldEmail, setFieldEmail] = useState('');
   const [showAlert, setShowAlert] = useState(false);
 
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fieldEmail);
 
-  const handleSubmit = () => {
-    // TODO: needs more checks and backend support
+  const handleSubmit = async () => {
     if (!isEmailValid) {
       setShowAlert(true);
+      return;
     }
+
+    // TODO: call backend /auth/send-code here
+    // For now, store email and navigate to verification
+    update({ email: fieldEmail.trim().toLowerCase() });
+    router.push('/AccountVerification');
   }
 
   const handleCreateAccount = () => {
-    // TODO
+    router.push('/RegisterPage');
   }
 
   return (
     <FlowLayout
       title='Welcome Back!'
-      subTitle='Continuing the journey? Log In!'
+      subTitle='Staying in the Loop? Log In!'
+      onBackPress={() => router.back()}
     >
-      
+
       {showAlert && (
         <View className='mt-4'>
           <InlineAlert
@@ -63,8 +69,9 @@ export default function LoginPage({
       </View>
 
       <Pressable className='mt-4' onPress={handleCreateAccount}>
-        <Text className='font-normal text-base text-center' >
-          I need to make an account.
+        <Text className='text-base text-center'>
+          Don't have an account?{' '}
+          <Text className='font-semibold text-lhlBurntOrange'>Sign Up</Text>
         </Text>
       </Pressable>
 
