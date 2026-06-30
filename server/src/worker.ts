@@ -6,13 +6,17 @@ import { userRoutes } from "./routes/users.worker";
 import { eventRoutes } from "./routes/events.worker";
 import { notificationRoutes } from "./routes/notifications.worker";
 import { savedRoutes } from "./routes/saved.worker";
-import { run as runTexasToday } from "./scrapers/texasToday";
+// import { run as runTexasToday } from "./scrapers/texasToday"; // TODO: add texasToday scraper
 import { run as runHornsLink } from "./scrapers/hornslink";
 
 export type Env = {
   DB: D1Database;
   JWT_SECRET: string;
   RESEND_API_KEY: string;
+  // When set to "true" in .dev.vars, the Worker logs verification codes to
+  // the wrangler console instead of sending them through Resend. Never set
+  // in production.
+  RESEND_DEV_MODE?: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -121,7 +125,7 @@ export default {
     }
 
     // The 6-hour scrape cron.
-    ctx.waitUntil(runTexasToday(env));
+    // ctx.waitUntil(runTexasToday(env)); // TODO: add texasToday scraper
     ctx.waitUntil(runHornsLink(env));
   },
 };

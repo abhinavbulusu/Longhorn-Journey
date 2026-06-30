@@ -1,11 +1,11 @@
-name = "longhorn-loop-api"
+name = "loop-db"
 main = "src/worker.ts"
 compatibility_date = "2024-01-01"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "longhorn-loop-db"
-database_id = "caa7fe52-5852-4fbe-b656-add810de2d5d"
+database_name = "loop-db"
+database_id = "dc2be36a-b3b9-45a5-9fc8-fb223eb336bf"
 
 [triggers]
 # Both schedules fire the same scheduled() handler in worker.ts, which
