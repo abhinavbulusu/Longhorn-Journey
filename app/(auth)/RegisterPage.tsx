@@ -1,12 +1,14 @@
+import InlineAlert from '@/app/components/alerts/InlineAlert';
 import PrimaryButton from '@/app/components/buttons/PrimaryButton';
 import TextInputField from '@/app/components/inputs/TextInputField';
 import FlowLayout from '@/app/components/layouts/FlowLayout';
-import { useOnboarding } from '@/app/context/OnboardingContext';
 import { API_BASE_URL } from '@/app/config/api';
+import { useOnboarding } from '@/app/context/OnboardingContext';
+import { UT_EMAIL_ERROR, isAllowedUTEmail } from '@/shared/utEmail';
+import { RESEND_COOLDOWN_MS } from '@/shared/verificationCode';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { View, Text, Pressable, ActivityIndicator } from 'react-native';
-import InlineAlert from '@/app/components/alerts/InlineAlert';
+import { View } from 'react-native';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -18,7 +20,8 @@ export default function RegisterPage() {
   const [alertMessage, setAlertMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fieldEmail);
+  // LOOP-255: the same allow-list the Worker enforces.
+  const isEmailValid = isAllowedUTEmail(fieldEmail);
 
   const validateForm = () => {
     if (!fieldFirstName.trim()) {
@@ -28,7 +31,7 @@ export default function RegisterPage() {
       return 'Please enter your last name.';
     }
     if (!isEmailValid) {
-      return 'UT email address is invalid or unregistered.';
+      return UT_EMAIL_ERROR;
     }
     return '';
   };
@@ -53,11 +56,19 @@ export default function RegisterPage() {
 
       const data = await res.json();
 
-      if (!res.ok) {
+      // RESEND_TOO_SOON is not a failure here (LOOP-302). It means a code for
+      // this address went out a moment ago — typically from this same screen,
+      // before the user tapped back off the verification step to check their
+      // email and then tapped Continue again. That code is still valid. The
+      // old alert stranded them on this page with "please wait", no idea how
+      // long, and no way forward to type the code they already had.
+      const tooSoon = !res.ok && data.error === 'RESEND_TOO_SOON';
+
+      if (!res.ok && !tooSoon) {
         if (data.error === 'INVALID_UT_EMAIL') {
-          setAlertMessage('Please use a valid @utexas.edu email address.');
-        } else if (data.error === 'RESEND_TOO_SOON') {
-          setAlertMessage('Verification code already sent. Please wait before requesting a new one.');
+          setAlertMessage(UT_EMAIL_ERROR);
+        } else if (data.error === 'SEND_FAILED') {
+          setAlertMessage("We couldn't send your code right now. Please try again.");
         } else {
           setAlertMessage('Something went wrong. Please try again.');
         }
@@ -70,8 +81,14 @@ export default function RegisterPage() {
         lastName: fieldLastName.trim(),
         email,
       });
-      router.push('/AccountVerification');
-    } catch (err) {
+      // ?sent=1: a code is already out (just now, or from the earlier send
+      // that caused the 429). Without it the verification screen sends a
+      // second one on mount and immediately trips the cooldown.
+      // retryAfterMs: so Resend shows the real wait instead of looking
+      // available while the server would refuse it.
+      const retryAfterMs = tooSoon ? data.retryAfterMs : RESEND_COOLDOWN_MS;
+      router.push(`/AccountVerification?sent=1&retryAfterMs=${Number(retryAfterMs) || 0}`);
+    } catch (_err) {
       setAlertMessage('Network error. Please check your connection.');
     } finally {
       setLoading(false);
@@ -80,23 +97,20 @@ export default function RegisterPage() {
 
   return (
     <FlowLayout
-      title='Welcome!'
-      subTitle='Start by creating an account.'
+      title="Welcome!"
+      subTitle="Start by creating an account."
       onBackPress={() => router.back()}
     >
-
       {alertMessage && (
-        <View className='mt-4'>
-          <InlineAlert
-            message={alertMessage}
-          />
+        <View className="mt-4">
+          <InlineAlert message={alertMessage} />
         </View>
       )}
 
-      <View className='mt-[42px]'>
+      <View className="mt-[42px]">
         <TextInputField
-          label='First Name'
-          placeholder='Enter your first name'
+          label="First Name"
+          placeholder="Enter your first name"
           clearable={true}
           value={fieldFirstName}
           onChangeText={(text) => {
@@ -106,10 +120,10 @@ export default function RegisterPage() {
         />
       </View>
 
-      <View className='mt-4'>
+      <View className="mt-4">
         <TextInputField
-          label='Last Name'
-          placeholder='Enter your last name'
+          label="Last Name"
+          placeholder="Enter your last name"
           clearable={true}
           value={fieldLastName}
           onChangeText={(text) => {
@@ -119,10 +133,10 @@ export default function RegisterPage() {
         />
       </View>
 
-      <View className='mt-4'>
+      <View className="mt-4">
         <TextInputField
-          label='UT Email'
-          placeholder='Enter your UT email address'
+          label="UT Email"
+          placeholder="Enter your UT email address"
           clearable={true}
           value={fieldEmail}
           onChangeText={(text) => {
@@ -132,14 +146,13 @@ export default function RegisterPage() {
         />
       </View>
 
-      <View className='mt-[42px] mx-2'>
+      <View className="mt-[42px]">
         <PrimaryButton
           label={loading ? 'Sending...' : 'Sign Up'}
           isFilled={isEmailValid && !loading}
           onPress={loading ? undefined : handleSubmit}
         />
       </View>
-
     </FlowLayout>
   );
 }

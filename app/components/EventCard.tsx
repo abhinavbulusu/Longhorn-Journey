@@ -1,7 +1,10 @@
-import BookmarkIcon from '@/assets/images/bookmark.svg';
+import EventFlyerPlaceholder from '@/app/components/EventFlyerPlaceholder';
+import BookmarkGlyph from '@/app/components/icons/BookmarkGlyph';
 import LocationIcon from '@/assets/images/location.svg';
 import VerifiedIcon from '@/assets/images/verified.svg';
+import { useThemeColors } from '@/app/lib/themeColors';
 import { useRouter } from 'expo-router';
+import { type ViewStyle } from 'react-native';
 import React from 'react';
 import { Image, Pressable, Text, TouchableOpacity, View } from 'react-native';
 
@@ -15,8 +18,10 @@ export interface ApiEvent {
   end_datetime: string | null;
   location_short: string | null;
   location_full: string | null;
-  host_organization_id: number;
-  host_organization_name: string;
+  latitude: number | null;
+  longitude: number | null;
+  host_organization_id: number | null;
+  host_organization_name: string | null;
   event_url: string | null;
   rsvp_url: string | null;
   image_url: string | null;
@@ -24,14 +29,31 @@ export interface ApiEvent {
   theme: string | null;
   visibility: string;
   rsvp_total: number;
+  save_count: number;
+  rsvp_count: number;
+  view_count: number;
   org_profile_picture: string | null;
+  // Detail endpoint only (GET /events/:id); list and feed rows omit them.
+  org_verified?: boolean;
+  is_following_org?: boolean;
+  // Whether the caller may PATCH this event: its creator, or an admin/editor
+  // of the host org (LOOP-282). Gates the event page's edit button.
+  can_edit?: boolean;
+  // 'in_person' | 'online' (shared/venueType.ts). Returned by the detail endpoint
+  // and the create flow; list rows may omit it, which reads as in person.
+  venue_type?: string;
   categories: { id: string; name: string }[];
+  // Classifier-assigned taxonomy tags (Phase 2). Rendered as chips.
+  tags: string[];
+  discovery_bucket?: string | null;
   benefits: string[];
   expires_at: string | null;
   is_featured: number;
   created_by_user_id: number | null;
   is_archived: number;
   archived_at: string | null;
+  is_rsvped: boolean;
+  created_at?: string;
 }
 
 // Formats an ISO datetime as "Fri, 4/29 • 6:00 PM".
@@ -58,9 +80,11 @@ interface EventCardProps {
   item: ApiEvent;
   isSaved: boolean;
   onToggleSave: (eventId: number) => void;
+  style?: ViewStyle;
 }
 
-export default function EventCard({ item, isSaved, onToggleSave }: EventCardProps) {
+export default function EventCard({ item, isSaved, onToggleSave, style }: EventCardProps) {
+  const colors = useThemeColors();
   const router = useRouter();
   const hasImage = !!item.image_url;
   const hasBenefits = item.benefits && item.benefits.length > 0;
@@ -72,25 +96,66 @@ export default function EventCard({ item, isSaved, onToggleSave }: EventCardProp
   return (
     <Pressable
       onPress={handlePress}
-      style={{ width: 180 }}
-      className="mr-4 rounded-2xl overflow-hidden bg-white border border-lhlGrey"
+      style={[{ width: 180 }, style]}
+      className="mr-4 rounded-2xl overflow-hidden bg-lhlSurface border border-lhlMutedBorder"
     >
-      <View style={{ backgroundColor: '#D9D9D9', height: 160 }} className="w-full">
+      <View
+        style={{
+          height: 160,
+          width: '100%',
+          backgroundColor: colors.placeholder,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {!hasImage && <EventFlyerPlaceholder seed={item.id} />}
+
         {hasImage && (
-          <Image
-            source={{ uri: item.image_url! }}
-            style={{ width: '100%', height: '100%' }}
-            resizeMode="cover"
-          />
+          <>
+            {/* Blurred copy of the poster fills the card, giving the
+                foreground image an atmospheric backdrop. */}
+            <Image
+              source={{ uri: item.image_url! }}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                opacity: 0.55,
+              }}
+              blurRadius={18}
+              resizeMode="cover"
+            />
+            <Image
+              source={{ uri: item.image_url! }}
+              style={{ width: '100%', height: '100%' }}
+              resizeMode="contain"
+            />
+          </>
         )}
 
+        {/*
+          Bottom-RIGHT, not bottom-left. EventFlyerPlaceholder anchors its
+          artwork "xMinYMax" — bottom-left — because that is where the tower
+          sits and centring it would crop the subject on wide containers. The
+          tag used to be pinned to that same corner, so on every flyerless card
+          it landed squarely on the tower. Not an occasional overlap: the two
+          were anchored to the same point, so it happened every time.
+
+          Lasya, in Discord: "can we maybe right align the tags? so it doesn't
+          cover up the logo on the no flyer case!"
+
+          The right side is free — the save button is top-right, and a poster
+          that fills the frame has no subject pinned to a corner either way.
+        */}
         {hasBenefits && (
           <View
             style={{
               position: 'absolute',
               bottom: 8,
-              left: 8,
-              backgroundColor: '#BF5700',
+              right: 8,
+              backgroundColor: colors.brand,
               borderRadius: 12,
               paddingHorizontal: 8,
               paddingVertical: 3,
@@ -104,7 +169,7 @@ export default function EventCard({ item, isSaved, onToggleSave }: EventCardProp
 
         <TouchableOpacity
           onPress={(e) => {
-            // Don't let the bookmark tap bubble up and trigger card navigation.
+            // Stop the tap so it doesn't also open the event.
             e.stopPropagation();
             onToggleSave(item.id);
           }}
@@ -112,7 +177,7 @@ export default function EventCard({ item, isSaved, onToggleSave }: EventCardProp
             position: 'absolute',
             top: 10,
             right: 10,
-            backgroundColor: 'white',
+            backgroundColor: colors.surface,
             borderRadius: 999,
             width: 34,
             height: 34,
@@ -124,13 +189,13 @@ export default function EventCard({ item, isSaved, onToggleSave }: EventCardProp
             elevation: 3,
           }}
         >
-          <BookmarkIcon width={10} height={14} color={isSaved ? '#BF5700' : '#020B12'} />
+          <BookmarkGlyph saved={isSaved} width={10} height={14} />
         </TouchableOpacity>
       </View>
 
       <View style={{ padding: 12 }}>
         <Text
-          style={{ fontSize: 14, fontWeight: '700', color: '#020B12', marginBottom: 2 }}
+          style={{ fontSize: 14, fontWeight: '700', color: colors.ink, marginBottom: 2 }}
           numberOfLines={1}
         >
           {item.title}
@@ -143,19 +208,19 @@ export default function EventCard({ item, isSaved, onToggleSave }: EventCardProp
               style={{ width: 14, height: 14, borderRadius: 7, marginRight: 4 }}
             />
           )}
-          <Text style={{ fontSize: 12, color: '#020B12', flex: 1 }} numberOfLines={1}>
+          <Text style={{ fontSize: 12, color: colors.ink, flex: 1 }} numberOfLines={1}>
             {item.host_organization_name}
           </Text>
           <VerifiedIcon width={16} height={16} style={{ marginLeft: 4, flexShrink: 0 }} />
         </View>
 
-        <Text style={{ fontSize: 12, color: '#9A9A9A', marginBottom: 4 }}>
+        <Text style={{ fontSize: 12, color: colors.inkMuted, marginBottom: 4 }}>
           {formatEventDate(item.start_datetime)}
         </Text>
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-          <LocationIcon width={14} height={14} />
-          <Text style={{ fontSize: 12, color: '#9A9A9A' }} numberOfLines={1}>
+          <LocationIcon width={14} height={14} color={colors.ink} />
+          <Text style={{ fontSize: 12, color: colors.inkMuted }} numberOfLines={1}>
             {item.location_short || 'TBD'}
           </Text>
         </View>

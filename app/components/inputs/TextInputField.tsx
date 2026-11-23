@@ -1,35 +1,81 @@
-import React, { useState, useRef } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TextInputProps,
-  Pressable,
-} from 'react-native';
-import { XCircleIcon } from 'phosphor-react-native';
+import { useThemeColors } from '@/app/lib/themeColors';
+import LhlPillCross from '@/assets/icons/LhlPillCross';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { TextInputInstance } from 'react-native';
+import { Pressable, Text, TextInput, TextInputProps, View } from 'react-native';
+
+/** Form-field default. Deliberately unchanged — see the `height` prop. */
+const DEFAULT_HEIGHT = 33;
 
 interface TextInputFieldProps extends TextInputProps {
   label?: string;
   leftIcon?: React.ReactNode;
+  rightAccessory?: React.ReactNode;
   clearable?: boolean;
   borderRadius?: number; // px
+  forceFocusStyles?: boolean;
+  /**
+   * Control height in px.
+   *
+   * Opt-in rather than a blanket change: 33 is below the 44pt tap-target floor
+   * everywhere it is used, but this component backs eleven screens' worth of
+   * form fields and raising all of them is a design call, not a bug fix. Only
+   * Explore's search bar overrides it today (LOOP-283 flagged the same
+   * hit-target problem for that screen's other controls). If the team decides
+   * to lift the floor app-wide, change DEFAULT_HEIGHT and drop the overrides.
+   */
+  height?: number;
+  /**
+   * Forwarded to the inner TextInput, so a parent can blur/focus it.
+   *
+   * React 19 passes `ref` as an ordinary prop, which matters here: it is
+   * destructured out below rather than left in `...props`, because the spread
+   * lands AFTER the internal `ref` on the TextInput and would silently
+   * overwrite it — breaking focusInput() and the clear button with it.
+   */
+  ref?: React.Ref<TextInputInstance>;
 }
-
-const CLEARABLE_ICON_COLORS = {
-  border: 'hsla(0,0%,78%,1)', // lhlBorderColor
-  active: 'hsla(27, 93%, 32%, 1)', // lhlBurntOrange
-};
 
 export default function TextInputField({
   label,
   leftIcon,
+  rightAccessory,
   clearable,
-  borderRadius=8,
+  borderRadius = 4,
+  forceFocusStyles = false,
+  height = DEFAULT_HEIGHT,
+  ref,
   ...props
 }: TextInputFieldProps) {
+  const colors = useThemeColors();
   const [isFocused, setIsFocused] = useState(false);
-  const inputRef = useRef<TextInput>(null);
-  const blurTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const inputRef = useRef<TextInputInstance>(null);
+  // ReturnType<typeof setTimeout>, not NodeJS.Timeout: RN's types no longer
+  // pull in Node's globals (Expo SDK 57), and the handle here is whatever the
+  // RN runtime's setTimeout returns — a number on Hermes — not a Node Timeout.
+  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Callback ref that feeds both the internal ref and the caller's, so
+  // forwarding costs the component none of its own control over the input.
+  const setInputRef = useCallback(
+    (node: TextInputInstance | null) => {
+      inputRef.current = node;
+      if (typeof ref === 'function') ref(node);
+      else if (ref) (ref as React.RefObject<TextInputInstance | null>).current = node;
+    },
+    [ref],
+  );
+
+  // A blur schedules a 100ms timer so handleClear() can still fire. If the
+  // field unmounts inside that window the timer is still pending and will call
+  // setState on a dead component. Harmless in React 19, but it keeps the
+  // component alive for no reason and hides real leaks, so clear it.
+  useEffect(
+    () => () => {
+      if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+    },
+    [],
+  );
 
   // --- HANDLERS ---
   const handleFocus = (e: any) => {
@@ -38,7 +84,7 @@ export default function TextInputField({
       clearTimeout(blurTimeoutRef.current);
       blurTimeoutRef.current = null;
     }
-    
+
     setIsFocused(true);
     props.onFocus?.(e);
   };
@@ -49,13 +95,13 @@ export default function TextInputField({
       setIsFocused(false);
       blurTimeoutRef.current = null;
     }, 100);
-    
+
     props.onBlur?.(e);
   };
 
   const focusInput = () => {
     inputRef.current?.focus();
-  }
+  };
 
   const handleClear = () => {
     // Clears text and refocuses text input
@@ -64,22 +110,17 @@ export default function TextInputField({
   };
 
   // --- DERIVED VALUES ---
-  const borderColorClass = isFocused
-    ? 'border-lhlBurntOrange'
-    : 'border-lhlBorderColor';
-
-  const clearIconColor =
-    isFocused && props.value
-      ? CLEARABLE_ICON_COLORS.active
-      : CLEARABLE_ICON_COLORS.border;
+  const borderColorClass =
+    isFocused || forceFocusStyles ? 'border-lhlBurntOrange' : 'border-lhlBorderColor';
 
   // --- RENDER: TEXT INPUT FIELD ---
   return (
     <View>
       {/* LABEL */}
+      {/* Label is 600; the input below stays regular. */}
       {label && (
         <Pressable onPress={focusInput}>
-          <Text className="font-semibold text-base mb-1">{label}</Text>
+          <Text className="font-roboto-semibold text-[16px] text-lhlInk">{label}</Text>
         </Pressable>
       )}
 
@@ -87,50 +128,95 @@ export default function TextInputField({
       <Pressable
         onPress={focusInput}
         className={`
+          mt-[6px]
           flex-row items-center
           border
-          px-3 h-[48] gap-2
+          px-[9px] gap-2
           ${borderColorClass}
-          bg-white
+          bg-lhlSurface
         `}
+        // height moved out of the className: NativeWind needs static classes at
+        // build time, so `h-[${height}px]` would not compile to anything.
         style={{
-          borderRadius: borderRadius
+          borderRadius: borderRadius,
+          height,
         }}
       >
         {/* Left Icon */}
         {leftIcon && <View>{leftIcon}</View>}
 
         {/* Text Input */}
+        {/*
+          text-lhlInk is load-bearing: without an explicit colour the platform
+          default is black, which is invisible against the dark-mode surface.
+          That was the "dark mode is not working" report on every search field.
+        */}
         <TextInput
-          ref={inputRef}
+          ref={setInputRef}
           accessibilityLabel={label}
           accessibilityRole="text"
           className={`
-            flex-1
-            text-base border-none
+            flex-1 font-['Roboto-Flex'] text-[14px] text-lhlInk
             focus:ring-0 focus:outline-none
-            placeholder:text-lhlSecondaryTextGrey
+            placeholder:text-lhlMutedText
           `}
-          style={{ height: '100%', textAlignVertical: 'center', fontSize: 16 }}
           underlineColorAndroid="transparent"
           onFocus={handleFocus}
           onBlur={handleBlur}
           {...props}
-        />
+          /*
+            WHY THE TEXT SAT OFF-CENTRE, and why three properties are needed
+            rather than one.
 
+            The row is 33pt with `items-center`, so the input is centred by the
+            layout — but a TextInput is not just its text. It ships with its own
+            padding, and on Android with extra font padding on top of that, and
+            neither is symmetric. Centring a box that has 9pt of built-in top
+            padding and 4pt of bottom padding centres the BOX, which leaves the
+            glyphs sitting low.
+
+              padding: 0            drops RN's built-in inset on both platforms
+              includeFontPadding    Android's extra ascender/descender space,
+                                    which is what makes text look high in a
+                                    short field
+              textAlignVertical     Android defaults this to 'top' for a
+                                    single-line input in some configurations
+
+            height 100% so the input fills the row and centres its own text
+            inside it, rather than being a short box centred in a taller one.
+
+            Last, after the spread, so these are not silently dropped by a
+            caller passing `style` — the caller's own style is merged in rather
+            than replaced.
+          */
+          style={[
+            {
+              height: '100%',
+              padding: 0,
+              includeFontPadding: false,
+              textAlignVertical: 'center',
+            },
+            props.style,
+          ]}
+        />
         {/* Clear Button */}
-        {clearable && isFocused && (
+        {/*
+          Bare cross, not LhlXCircleIcon. The circled variant was never in the
+          Figma and the bug bash called it out explicitly. Colour comes from the
+          theme so it survives dark mode.
+        */}
+        {clearable && (isFocused || forceFocusStyles) && (
           <Pressable
             onPressIn={(e) => e.preventDefault?.()}
             onPress={handleClear}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Clear text"
           >
-            <XCircleIcon
-              size={22}
-              weight="light"
-              color={clearIconColor}
-            />
+            <LhlPillCross size={11} color={colors.inkSecondary} />
           </Pressable>
         )}
+        {rightAccessory}
       </Pressable>
     </View>
   );

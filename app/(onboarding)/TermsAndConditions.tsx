@@ -1,11 +1,13 @@
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, SafeAreaView, ScrollView } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
+import PrimaryButton from '../components/buttons/PrimaryButton';
+import FlowLayout from '../components/layouts/FlowLayout';
 
 const TERMS = [
   {
     id: 'responsible',
-    label: 'I agree to use Longhorn Journey responsibly and not post misleading or troll content.',
+    label: 'I agree to use Longhorn Loop responsibly and not post misleading or troll content.',
   },
   {
     id: 'visible',
@@ -15,90 +17,107 @@ const TERMS = [
     id: 'guidelines',
     label: 'I agree to respect the community guidelines and other users.',
   },
-];
+  {
+    id: 'removed',
+    label:
+      'I acknowledge that violating the guidelines may result in my removal and a permanent ban.',
+  },
+] as const;
+
+/** Every box starts unchecked. Derived from TERMS so the two cannot disagree —
+ *  see the note on `allChecked`. */
+const NONE_CHECKED: Record<string, boolean> = Object.fromEntries(
+  TERMS.map((term) => [term.id, false]),
+);
+
+/**
+ * The checkbox was a 16pt square with a 12pt label beside it, which is the
+ * smallest interactive target in the app and sits on the one screen nobody can
+ * skip. Apple's floor is 44pt and Android's is 48dp; the box itself is now 24pt
+ * and the whole row is the target, padded out past 48.
+ *
+ * The row being pressable is the part that actually matters — people aim at the
+ * words, not the box.
+ */
+const ROW_MIN_HEIGHT = 48;
 
 export default function TermsAndConditions() {
   const router = useRouter();
-  const [checked, setChecked] = useState<Record<string, boolean>>({
-    responsible: false,
-    visible: false,
-    guidelines: false,
-  });
+  const [checked, setChecked] = useState<Record<string, boolean>>(NONE_CHECKED);
 
-  const allChecked = Object.values(checked).every(Boolean);
+  // Over TERMS, not over the keys of `checked`. Those are not the same set: a
+  // term nobody has tapped yet has no key, so `Object.values(checked).every()`
+  // is asking "is everything I have seen ticked", which is true of an empty
+  // object and true of three ticks out of four. Adding a fourth term to the
+  // list is exactly how you would hit that, and it is what happened here.
+  const allChecked = TERMS.every((term) => checked[term.id]);
 
   const toggleCheckbox = (id: string) => {
     setChecked((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const handleSubmit = () => {
+    if (allChecked) {
+      router.push('/OnboardingComplete');
+    }
+  };
+
   return (
-    <SafeAreaView className="flex-1 bg-white">
-      <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="px-6 pt-4">
-
-        {/* Back Arrow */}
-        <TouchableOpacity onPress={() => router.back()} className="mb-4 self-start">
-          <Text className="text-2xl text-gray-800">←</Text>
-        </TouchableOpacity>
-
-        {/* Progress Bar */}
-        <View className="h-1.5 bg-gray-200 rounded-full mb-8 overflow-hidden">
-          <View className="h-full w-full bg-orange-700 rounded-full" />
+    <FlowLayout
+      title="Terms and Conditions"
+      subTitle="By continuing, I acknowledge that:"
+      onBackPress={() => router.back()}
+      showProgressBar={true}
+      step={4}
+      totalSteps={4}
+      footer={
+        <View className="mt-[16px] mb-[42px]">
+          <PrimaryButton label="Next" isFilled={allChecked} onPress={handleSubmit} />
         </View>
+      }
+    >
+      {/* No mx: FlowLayout already supplies the page gutter, and the rows'
+          px-2 -mx-2 cancels out (it widens the press target, not the inset). */}
+      <View className="mt-[32px] gap-2">
+        {TERMS.map((term) => {
+          const isSelected = checked[term.id];
 
-        {/* Title */}
-        <Text className="text-2xl font-bold text-gray-900 mb-2">Terms and Conditions</Text>
-        <Text className="text-sm text-gray-500 mb-7">By continuing, I acknowledge that:</Text>
-
-        {/* Checkboxes */}
-        <View className="gap-5">
-          {TERMS.map((term) => (
-            <TouchableOpacity
+          return (
+            <Pressable
               key={term.id}
-              className="flex-row items-start gap-3"
               onPress={() => toggleCheckbox(term.id)}
-              activeOpacity={0.7}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: isSelected }}
+              accessibilityLabel={term.label}
+              hitSlop={8}
+              className="flex-row items-center gap-4 rounded-lg px-2 -mx-2"
+              // Plain object, not a `({ pressed }) => ...` callback. Every
+              // element here goes through NativeWind's jsx runtime
+              // (jsxImportSource in babel.config), and a function-valued style
+              // is dropped by it -- which was silently costing these rows both
+              // ROW_MIN_HEIGHT and their padding, taking the checkbox under
+              // the 44pt tap-target minimum.
+              style={{ minHeight: ROW_MIN_HEIGHT, paddingVertical: 6, outlineStyle: 'none' } as any}
             >
+              {/* Checkbox UI */}
               <View
-                className={`w-5 h-5 rounded border-2 items-center justify-center mt-0.5 shrink-0 ${
-                  checked[term.id]
-                    ? 'bg-orange-700 border-orange-700'
-                    : 'bg-white border-gray-400'
+                className={`w-6 h-6 border-2 rounded-md items-center justify-center ${
+                  isSelected ? 'bg-lhlBurntOrange border-lhlBurntOrange' : 'border-lhlInk'
                 }`}
               >
-                {checked[term.id] && (
-                  <Text className="text-white text-xs font-bold">✓</Text>
+                {isSelected && (
+                  <Text className="text-white text-[15px] leading-none font-bold">✓</Text>
                 )}
               </View>
-              <Text className="text-sm text-gray-700 leading-5 flex-1">{term.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
 
-        {/* Spacer */}
-        <View className="flex-1" />
-
-        {/* Next Button */}
-        <TouchableOpacity
-          className={`mt-10 mb-8 rounded-lg py-4 items-center justify-center ${
-            allChecked
-              ? 'bg-orange-700'
-              : 'bg-transparent border border-gray-300'
-          }`}
-          onPress={allChecked ? () => {
-            router.push('/OnboardingComplete');
-          } : undefined}
-          activeOpacity={allChecked ? 0.8 : 1}
-        >
-          <Text
-            className={`text-base font-semibold ${
-              allChecked ? 'text-white' : 'text-gray-400'
-            }`}
-          >
-            Next
-          </Text>
-        </TouchableOpacity>
-
-      </ScrollView>
-    </SafeAreaView>
+              {/* Label Text */}
+              <Text className="font-['Roboto-Flex'] text-[15px] leading-[21px] font-normal text-lhlAccent flex-1">
+                {term.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </FlowLayout>
   );
 }

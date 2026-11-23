@@ -1,80 +1,139 @@
+import InlineAlert from '@/app/components/alerts/InlineAlert';
 import PrimaryButton from '@/app/components/buttons/PrimaryButton';
 import TextInputField from '@/app/components/inputs/TextInputField';
 import FlowLayout from '@/app/components/layouts/FlowLayout';
+import { API_BASE_URL } from '@/app/config/api';
 import { useOnboarding } from '@/app/context/OnboardingContext';
+import { UT_EMAIL_ERROR, isAllowedUTEmail } from '@/shared/utEmail';
+import { RESEND_COOLDOWN_MS } from '@/shared/verificationCode';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { View, Text, Pressable } from 'react-native';
-import InlineAlert from '@/app/components/alerts/InlineAlert';
+import { Pressable, Text, View } from 'react-native';
 
 export default function LoginPage() {
   const router = useRouter();
   const { update } = useOnboarding();
 
   const [fieldEmail, setFieldEmail] = useState('');
-  const [showAlert, setShowAlert] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fieldEmail);
+  // LOOP-255: the same allow-list the Worker enforces. A generic email
+  // regex here let people fill the form and get rejected on submit.
+  const isEmailValid = isAllowedUTEmail(fieldEmail);
 
+  /**
+   * Request the code here rather than letting the verification screen do it.
+   *
+   * This screen previously only stashed the email and navigated, with a
+   * "call backend here" TODO. It appeared to work because AccountVerification
+   * sends a code from a mount effect — but that meant every failure surfaced
+   * one screen too late, on a page already showing six empty code boxes, and
+   * an unregistered address was walked straight into creating an account.
+   *
+   * `mode: 'login'` is what makes the server answer ACCOUNT_NOT_FOUND instead
+   * of issuing a code. We only navigate once a code is genuinely on its way.
+   */
   const handleSubmit = async () => {
-    if (!isEmailValid) {
-      setShowAlert(true);
-      return;
-    }
+    if (!isEmailValid || loading) return;
 
-    // TODO: call backend /auth/send-code here
-    // For now, store email and navigate to verification
-    update({ email: fieldEmail.trim().toLowerCase() });
-    router.push('/AccountVerification');
-  }
+    const email = fieldEmail.trim().toLowerCase();
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/send-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, mode: 'login' }),
+      });
+      const result = await res.json().catch(() => ({}) as { error?: string });
+
+      if (!res.ok) {
+        if (result.error === 'ACCOUNT_NOT_FOUND') {
+          setError("We couldn't find an account with that email. Try signing up instead.");
+        } else if (result.error === 'INVALID_UT_EMAIL') {
+          setError(UT_EMAIL_ERROR);
+        } else if (result.error === 'SEND_FAILED') {
+          // The server rolled its write back, so "try again" is honest advice
+          // here — there is no cooldown standing in the way.
+          setError("We couldn't send your code right now. Please try again.");
+        } else if (result.error === 'RESEND_TOO_SOON') {
+          // A code from a moment ago is still valid, so this is not a failure
+          // worth stopping on — send them to type the one they already have.
+          // retryAfterMs carries the server's remaining wait so Resend is
+          // shown locked with a countdown, not as a button that will 429.
+          update({ email });
+          router.push(
+            `/AccountVerification?sent=1&retryAfterMs=${Number(result.retryAfterMs) || 0}`,
+          );
+          return;
+        } else {
+          setError('Something went wrong sending your code. Please try again.');
+        }
+        return;
+      }
+
+      update({ email });
+      // ?sent=1 tells the verification screen a code is already in flight, so
+      // it doesn't fire a second /auth/send-code and immediately trip the
+      // cooldown it just created — and retryAfterMs tells it that cooldown is
+      // running, since a successful send has no 429 to read it from.
+      router.push(`/AccountVerification?sent=1&retryAfterMs=${RESEND_COOLDOWN_MS}`);
+    } catch {
+      setError('Network error. Please check your connection and try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleCreateAccount = () => {
     router.push('/RegisterPage');
-  }
+  };
 
   return (
     <FlowLayout
-      title='Welcome Back!'
-      subTitle='Staying in the Loop? Log In!'
+      title="Welcome Back!"
+      subTitle="Staying in the Loop? Log In!"
       onBackPress={() => router.back()}
     >
-
-      {showAlert && (
-        <View className='mt-4'>
-          <InlineAlert
-            message='UT email address is invalid or unregistered.'
-          />
+      {error && (
+        <View className="mt-4">
+          <InlineAlert message={error} />
         </View>
       )}
 
-      <View className='mt-[42px]'>
+      <View className="mt-[42px]">
         <TextInputField
-          label='UT Email'
-          placeholder='Enter your UT Email'
+          label="UT Email"
+          placeholder="Enter your UT Email"
           clearable={true}
           value={fieldEmail}
           onChangeText={(text) => {
             setFieldEmail(text);
-            setShowAlert(false);
+            setError(null);
           }}
         />
       </View>
 
-      <View className='mt-[42px] mx-2'>
+      <View className="mt-[42px]">
         <PrimaryButton
-          label='Verify Email'
+          label="Verify Email"
           isFilled={isEmailValid}
-          onPress={handleSubmit}
+          onPress={loading ? undefined : handleSubmit}
+          isLoading={loading}
+          loadingLabel="Sending code..."
         />
       </View>
 
-      <Pressable className='mt-4' onPress={handleCreateAccount}>
-        <Text className='text-base text-center'>
-          Don't have an account?{' '}
-          <Text className='font-semibold text-lhlBurntOrange'>Sign Up</Text>
+      <Pressable className="mt-4" onPress={handleCreateAccount}>
+        {/* text-lhlInk, not the default: with no colour set RN renders black,
+            which disappeared on the dark-mode background. */}
+        <Text className="text-center font-roboto text-base text-lhlInk">
+          {"Don't have an account? "}
+          <Text className="font-roboto-semibold text-lhlAccent">Sign Up</Text>
         </Text>
       </Pressable>
-
     </FlowLayout>
   );
 }

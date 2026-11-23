@@ -1,6 +1,8 @@
+import BellIcon from '@/assets/images/bell.svg';
 import { ArrowLeft } from 'phosphor-react-native';
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Dimensions,
   Image,
   SectionList,
@@ -18,6 +20,11 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useOnboarding } from '@/app/context/OnboardingContext';
+import { useThemeColors } from '@/app/lib/themeColors';
+import { API_BASE_URL } from '@/app/config/api';
+import { notifications as notificationKeys } from '@/app/lib/queryKeys';
+import { useQueryClient } from '@tanstack/react-query';
 
 // ---------- Types ----------
 
@@ -37,107 +44,6 @@ interface Section {
   title: string;
   data: Notification[];
 }
-
-// ---------- Mock Data ----------
-
-const now = new Date();
-const todayStr = (hoursAgo: number) =>
-  new Date(now.getTime() - hoursAgo * 60 * 60 * 1000).toISOString();
-
-const yesterdayBase = new Date(now);
-yesterdayBase.setDate(yesterdayBase.getDate() - 1);
-const yesterdayStr = (hour: number) => {
-  const d = new Date(yesterdayBase);
-  d.setHours(hour, 0, 0, 0);
-  return d.toISOString();
-};
-
-const daysAgoStr = (days: number, hour: number) => {
-  const d = new Date(now);
-  d.setDate(d.getDate() - days);
-  d.setHours(hour, 0, 0, 0);
-  return d.toISOString();
-};
-
-const MOCK_NOTIFICATIONS: Notification[] = [
-  {
-    id: 1,
-    type: 'event_reminder',
-    title: "Converge's Social Extravaganza",
-    subtitle: 'is happening in 2 hours!',
-    avatar_url: null,
-    thumbnail_url: null,
-    event_id: 101,
-    read_at: null,
-    created_at: todayStr(0.5),
-  },
-  {
-    id: 2,
-    type: 'event_reminder',
-    title: 'Game Night @ WCP',
-    subtitle: 'is happening in 3 hours!',
-    avatar_url: null,
-    thumbnail_url: null,
-    event_id: 102,
-    read_at: null,
-    created_at: todayStr(1),
-  },
-  {
-    id: 3,
-    type: 'event_reminder',
-    title: 'Game Night @ SAL JAC MPR',
-    subtitle: 'is happening in 1 hour!',
-    avatar_url: null,
-    thumbnail_url: null,
-    event_id: 103,
-    read_at: null,
-    created_at: todayStr(2),
-  },
-  {
-    id: 4,
-    type: 'event_reminder',
-    title: "Converge's Social Extravaganza",
-    subtitle: 'is happening in 2 hours!',
-    avatar_url: null,
-    thumbnail_url: null,
-    event_id: 104,
-    read_at: yesterdayStr(14),
-    created_at: yesterdayStr(12),
-  },
-  {
-    id: 5,
-    type: 'event_reminder',
-    title: 'College of Sciences Career Fair',
-    subtitle: 'is happening in 1 hour!',
-    avatar_url: null,
-    thumbnail_url: null,
-    event_id: 105,
-    read_at: yesterdayStr(10),
-    created_at: yesterdayStr(9),
-  },
-  {
-    id: 6,
-    type: 'event_reminder',
-    title: 'Sana Associates',
-    subtitle: 'is happening in 3 hours!',
-    avatar_url: null,
-    thumbnail_url: null,
-    event_id: 106,
-    read_at: daysAgoStr(3, 15),
-    created_at: daysAgoStr(3, 12),
-  },
-  {
-    id: 7,
-    type: 'event_reminder',
-    title: 'SHPE General Meeting',
-    subtitle: 'is happening in 2 hours!',
-    avatar_url: null,
-    thumbnail_url: null,
-    event_id: 107,
-    read_at: daysAgoStr(5, 20),
-    created_at: daysAgoStr(5, 18),
-  },
-];
 
 // ---------- Helpers ----------
 
@@ -180,6 +86,7 @@ function NotificationRow({
   item: Notification;
   onDelete: (id: number) => void;
 }) {
+  const colors = useThemeColors();
   const isUnread = !item.read_at;
   const translateX = useSharedValue(0);
   const rowHeight = useSharedValue(72);
@@ -206,7 +113,7 @@ function NotificationRow({
 
   const panGesture = Gesture.Pan()
     .activeOffsetX([-15, 15]) // must move 15px horizontally before activating (fixes scroll conflict)
-    .failOffsetY([-10, 10])   // cancel if vertical movement > 10px (lets scroll take over)
+    .failOffsetY([-10, 10]) // cancel if vertical movement > 10px (lets scroll take over)
     .onStart(() => {
       startX.value = translateX.value;
     })
@@ -283,7 +190,7 @@ function NotificationRow({
               bottom: 0,
               left: 0,
               right: 0,
-              backgroundColor: '#EF4444',
+              backgroundColor: colors.destructive,
               justifyContent: 'center',
               alignItems: 'flex-end',
             },
@@ -301,7 +208,15 @@ function NotificationRow({
               alignItems: 'center',
             }}
           >
-            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>Delete</Text>
+            <Text
+              style={{
+                color: '#fff', // theme-exempt: label on the filled destructive swipe background, white in both themes
+                fontWeight: '700',
+                fontSize: 16,
+              }}
+            >
+              Delete
+            </Text>
           </TouchableOpacity>
         </Animated.View>
 
@@ -318,7 +233,7 @@ function NotificationRow({
                     width: 6,
                     height: 6,
                     borderRadius: 3,
-                    backgroundColor: '#BF5700',
+                    backgroundColor: colors.brand,
                   }}
                 />
               )}
@@ -332,9 +247,15 @@ function NotificationRow({
               ) : (
                 <View
                   className="w-10 h-10 rounded-full shrink-0 items-center justify-center"
-                  style={{ backgroundColor: '#BF5700' }}
+                  style={{ backgroundColor: colors.brand }}
                 >
-                  <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>
+                  <Text
+                    style={{
+                      color: '#fff', // theme-exempt: initial sits on the filled brand avatar, white in both themes
+                      fontWeight: '700',
+                      fontSize: 16,
+                    }}
+                  >
                     {item.title.charAt(0).toUpperCase()}
                   </Text>
                 </View>
@@ -346,7 +267,7 @@ function NotificationRow({
                   className="text-sm leading-5"
                   style={{
                     fontWeight: isUnread ? '700' : '400',
-                    color: isUnread ? '#020B12' : '#6B7280',
+                    color: isUnread ? colors.ink : colors.inkSecondary,
                   }}
                   numberOfLines={2}
                 >
@@ -355,7 +276,7 @@ function NotificationRow({
                 {item.subtitle ? (
                   <Text
                     className="text-[13px] leading-[18px]"
-                    style={{ color: isUnread ? '#6B7280' : '#9CA3AF' }}
+                    style={{ color: isUnread ? colors.inkSecondary : colors.inkMuted }}
                     numberOfLines={1}
                   >
                     {item.subtitle}
@@ -370,7 +291,7 @@ function NotificationRow({
                   className="w-14 h-14 rounded-lg shrink-0"
                 />
               ) : (
-                <View className="w-14 h-14 rounded-lg shrink-0 bg-[#D9D9D9]" />
+                <View className="w-14 h-14 rounded-lg shrink-0 bg-lhlPlaceholderGrey" />
               )}
             </View>
           </Animated.View>
@@ -383,14 +304,48 @@ function NotificationRow({
 // ---------- Main Screen ----------
 
 export default function NotificationsScreen() {
+  const colors = useThemeColors();
   const router = useRouter();
+  const { data } = useOnboarding();
+  const token = data.token || null;
+  // This screen owns its list in local state rather than through react-query,
+  // but the home bell badge reads the same endpoint through the cache. Deleting
+  // here has to poke that cache or the badge keeps counting rows that are gone.
+  const queryClient = useQueryClient();
 
-  const [notifications, setNotifications] = useState<Notification[]>(MOCK_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [toastVisible, setToastVisible] = useState(false);
 
   const pendingDeleteRef = useRef<{ id: number; item: Notification; index: number } | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastOpacityVal = useSharedValue(0);
+
+  // Fetch notifications from backend.
+  useEffect(() => {
+    if (!token) {
+      setIsLoading(false);
+      return;
+    }
+
+    const fetchNotifications = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/notifications`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const result = await res.json();
+          setNotifications(result.notifications ?? []);
+        }
+      } catch {
+        // Silently fail — show empty state
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchNotifications();
+  }, [token]);
 
   const sections = groupByDate(notifications);
   const isEmpty = notifications.length === 0;
@@ -428,10 +383,20 @@ export default function NotificationsScreen() {
     showToast();
 
     timerRef.current = setTimeout(() => {
+      const deletedId = pendingDeleteRef.current?.id;
       pendingDeleteRef.current = null;
       timerRef.current = null;
       hideToast();
-      // TODO: call DELETE /notifications/:id when backend is ready
+
+      // Fire-and-forget delete to backend.
+      if (deletedId && token) {
+        fetch(`${API_BASE_URL}/notifications/${deletedId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        })
+          .then(() => queryClient.invalidateQueries({ queryKey: notificationKeys.list() }))
+          .catch(() => {});
+      }
     }, 4000);
   };
 
@@ -463,7 +428,16 @@ export default function NotificationsScreen() {
     pendingDeleteRef.current = null;
     hideToast();
     setNotifications([]);
-    // TODO: call DELETE /notifications (clear all) when backend is ready
+
+    // Fire-and-forget clear all to backend.
+    if (token) {
+      fetch(`${API_BASE_URL}/notifications`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(() => queryClient.invalidateQueries({ queryKey: notificationKeys.list() }))
+        .catch(() => {});
+    }
   };
 
   return (
@@ -471,49 +445,55 @@ export default function NotificationsScreen() {
       <SafeAreaView className="flex-1 bg-lhlBackgroundColor" edges={['top', 'left', 'right']}>
         {/* Header */}
         <View className="flex-row items-center justify-between px-5 py-4">
-          <TouchableOpacity
-            onPress={() => router.back()}
-            className="w-10 h-10 justify-center"
-          >
-            <ArrowLeft size={24} color="#020B12" />
+          <TouchableOpacity onPress={() => router.back()} className="w-10 h-10 justify-center">
+            <ArrowLeft size={24} color={colors.ink} />
           </TouchableOpacity>
 
-          <Text className="text-lg font-bold text-[#020B12]">Notifications</Text>
+          <Text className="text-lg font-bold text-lhlInk">Notifications</Text>
 
           {notifications.length > 0 ? (
             <TouchableOpacity
               onPress={handleClearAll}
               className="w-[60px] items-end justify-center"
             >
-              <Text className="text-sm text-lhlBurntOrange font-semibold">Clear all</Text>
+              <Text className="text-sm text-lhlAccent font-semibold">Clear all</Text>
             </TouchableOpacity>
           ) : (
             <View className="w-[60px]" />
           )}
         </View>
 
-        <View className="h-px bg-[#D2DEE0] mx-5" />
+        <View className="h-px bg-lhlDivider mx-5" />
 
         {/* Content */}
-        {isEmpty ? (
+        {isLoading ? (
+          <View className="flex-1 items-center justify-center">
+            <ActivityIndicator size="large" color={colors.accent} />
+          </View>
+        ) : isEmpty ? (
           <View className="flex-1 items-center justify-center px-10">
-            <Text style={{ fontSize: 48, marginBottom: 16 }}>🔔</Text>
-            <Text className="text-base text-[#374151] font-semibold mb-2 text-center">
+            {/* The app's own bell, not the system emoji — which renders as a
+                different glyph on every platform and cannot take the theme. */}
+            <BellIcon
+              width={44}
+              height={50}
+              color={colors.placeholder}
+              style={{ marginBottom: 16 }}
+            />
+            <Text className="text-base text-lhlSecondaryTextGrey font-semibold mb-2 text-center">
               No new notifications
             </Text>
-            <Text className="text-sm text-[#9CA3AF] text-center">
-              When you have upcoming events or activity, they'll show up here.
+            <Text className="text-sm text-lhlMutedText text-center">
+              When you have upcoming events or activity, they&apos;ll show up here.
             </Text>
           </View>
         ) : (
           <SectionList
             sections={sections}
             keyExtractor={(item) => item.id.toString()}
-            renderItem={({ item }) => (
-              <NotificationRow item={item} onDelete={handleDelete} />
-            )}
+            renderItem={({ item }) => <NotificationRow item={item} onDelete={handleDelete} />}
             renderSectionHeader={({ section: { title } }) => (
-              <Text className="text-[13px] font-semibold text-lhlBurntOrange px-5 pt-4 pb-2 bg-lhlBackgroundColor">
+              <Text className="text-[13px] font-semibold text-lhlAccent px-5 pt-4 pb-2 bg-lhlBackgroundColor">
                 {title}
               </Text>
             )}
@@ -526,7 +506,7 @@ export default function NotificationsScreen() {
         {/* Undo Toast */}
         {toastVisible && (
           <Animated.View
-            className="absolute bottom-[100px] left-5 right-5 bg-[#020B12] rounded-xl px-4 py-[14px] flex-row items-center justify-between"
+            className="absolute bottom-[100px] left-5 right-5 bg-lhlInk rounded-xl px-4 py-[14px] flex-row items-center justify-between"
             style={[
               toastAnimatedStyle,
               {
@@ -537,9 +517,14 @@ export default function NotificationsScreen() {
               },
             ]}
           >
-            <Text className="text-white text-sm flex-1">Notification deleted</Text>
+            {/* surface, not white: the panel is bg-lhlInk, which is near-white in
+                dark mode — a fixed white label would vanish. surface inverts with it. */}
+            <Text className="text-lhlSurface text-sm flex-1">Notification deleted</Text>
             <TouchableOpacity onPress={handleUndo}>
-              <Text className="text-lhlBurntOrange text-sm font-bold ml-4">Undo</Text>
+              {/* Not accent: this panel is bg-lhlInk in BOTH themes, so an
+                  orange label sits at ~2.4:1 on it either way. On an inverted
+                  surface the action reads by weight, not by hue. */}
+              <Text className="ml-4 text-sm font-bold underline text-lhlSurface">Undo</Text>
             </TouchableOpacity>
           </Animated.View>
         )}

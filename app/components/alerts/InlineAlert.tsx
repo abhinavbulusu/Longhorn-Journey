@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text } from 'react-native';
+import { Text, View } from 'react-native';
 
 interface InlineAlertProps {
   message: string;
@@ -10,13 +10,13 @@ interface InlineAlertProps {
 
 export default function InlineAlert({
   message,
-  textColor='hsla(0, 100%, 41%, 1)',
-  borderColor='hsla(0, 100%, 41%, 1)',
-  backgroundColor='hsla(351, 76%, 95%, 1)',
+  textColor = 'hsla(0, 100%, 41%, 1)',
+  borderColor = 'hsla(0, 100%, 41%, 1)',
+  backgroundColor = 'hsla(351, 76%, 95%, 1)',
 }: InlineAlertProps) {
   return (
-    <View 
-      className='flex-row items-center h-[40px] p-3 rounded-[4px]'
+    <View
+      className="flex-row items-center h-[40px] p-3 rounded-[4px]"
       style={{
         backgroundColor,
         borderColor,
@@ -24,8 +24,9 @@ export default function InlineAlert({
       }}
     >
       <Text
-        className='text-sm font-medium pb-[1px]'
-        style={{ color: textColor }}>
+        className="font-['Roboto-Flex'] text-sm font-medium pb-[1px]"
+        style={{ color: textColor }}
+      >
         {message}
       </Text>
     </View>

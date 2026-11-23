@@ -1,25 +1,38 @@
 {
   "expo": {
-    "name": "Longhorn-Journey-Forked",
-    "slug": "Longhorn-Journey-Forked",
+    "name": "Longhorn Loop",
+    "slug": "longhorn-loop",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "longhornjourneyforked",
+    "scheme": "longhornloop",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "primaryColor": "#BF5700",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "org.longhorndevelopers.longhornloop",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSPhotoLibraryUsageDescription": "Longhorn Loop needs access to your photos so you can set a profile picture and add images to events you host.",
+        "NSCameraUsageDescription": "Longhorn Loop needs camera access so you can take a photo for your profile or an event you host.",
+        "NSLocationWhenInUseUsageDescription": "Longhorn Loop uses your location to show how far away campus events are."
+      }
     },
     "android": {
+      "package": "org.longhorndevelopers.longhornloop",
+      "versionCode": 1,
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#9D4A06",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "output": "static",
@@ -40,11 +53,35 @@
         }
       ],
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-secure-store",
+      "@react-native-community/datetimepicker",
+      "@sentry/react-native",
+      "expo-video",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Longhorn Loop uses your location to show how far events are and to give directions."
+        }
+      ],
+      "expo-image",
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "84aec976-eb90-4865-89d7-41e2f0774b6e"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/84aec976-eb90-4865-89d7-41e2f0774b6e"
     }
   }
 }

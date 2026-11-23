@@ -1,0 +1,647 @@
+import StepIndicator from '@/app/components/create-event/StepIndicator';
+import UrlInputHint from '@/app/components/create-event/UrlInputHint';
+import { checkExternalUrlInput, toExternalHttpUrl } from '@/shared/externalUrl';
+import ImagePlusIcon from '@/assets/images/image-plus.svg';
+import { useCreateEvent } from '@/app/context/CreateEventContext';
+import { EVENT_BENEFIT_OPTIONS } from '@/shared/eventBenefits';
+import { LOCATION_PLACEHOLDER, VENUE_TYPE_LABELS, VENUE_TYPES } from '@/shared/venueType';
+import type { CreateEventData } from '@/app/context/CreateEventContext';
+import { useOnboarding } from '@/app/context/OnboardingContext';
+import { ApiError, api } from '@/app/lib/api';
+import { appendImageFile } from '@/app/lib/imageForm';
+import { searchPlace } from '@/app/lib/localSearch';
+import {
+  events as eventsKeys,
+  feed as feedKeys,
+  org as orgKeys,
+  user as userKeys,
+} from '@/app/lib/queryKeys';
+import type { ThemeColors } from '@/app/lib/themeColors';
+import { useThemeColors } from '@/app/lib/themeColors';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
+import { useRouter } from 'expo-router';
+import React, { useMemo, useState } from 'react';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+
+type CreateEventResponse = { event: unknown };
+
+function appendOptional(form: FormData, key: string, value: string | null | undefined) {
+  const trimmed = value?.trim();
+  if (trimmed) form.append(key, trimmed);
+}
+
+async function appendImageToForm(form: FormData, data: CreateEventData): Promise<void> {
+  if (!data.imageUrl) return;
+  await appendImageFile(form, 'image', {
+    uri: data.imageUrl,
+    name: data.imageName,
+    mimeType: data.imageMimeType,
+  });
+}
+
+async function buildCreateEventForm(data: CreateEventData): Promise<FormData> {
+  const form = new FormData();
+
+  form.append('title', data.title.trim());
+  // Who the wizard's first step said is posting (LOOP-281).
+  //
+  // This form never sent it. Step 1 asks the question, stores the answer in
+  // CreateEventContext, and the preview screen reads poster.name off it -- but
+  // the request went out with no poster at all, so the server fell back to the
+  // caller's own name for host_organization_name and left
+  // host_organization_id NULL. GET /orgs/:orgId/events filters on that column,
+  // so an event an admin posted as their org appeared under Posted on their
+  // personal profile and nowhere in the org console. The org side of the app
+  // was effectively broken for anything created in-app.
+  //
+  // Only the id goes over the wire. The name is resolved from the
+  // organizations row server-side: the client's copy is a display string from
+  // a cached /orgs/mine response and would go stale the moment an org renamed
+  // itself, and trusting it would let a caller label an event with any org
+  // name they liked.
+  if (data.poster?.kind === 'org') {
+    form.append('host_organization_id', String(data.poster.id));
+  }
+  appendOptional(form, 'description', data.description);
+  if (data.startDatetime) form.append('start_datetime', data.startDatetime);
+  if (data.dateMode === 'range' && data.endDatetime) {
+    form.append('end_datetime', data.endDatetime);
+  }
+  appendOptional(form, 'location', data.locationFull);
+  // Not appendOptional: the column is NOT NULL and the server validates the
+  // value, so it is always sent.
+  form.append('venue_type', data.venueType);
+  // Resolve the typed location to coordinates now (iOS MKLocalSearch), so the
+  // event is stored with a real pin instead of relying on a viewer to backfill
+  // it later. No-op on non-iOS or when the place can't be resolved.
+  //
+  // Only for in-person events. An online event's "location" is a meeting link,
+  // and geocoding a URL either misses or -- worse -- matches something and
+  // drops a pin on a Zoom call. LOOP-275 makes the same point for the server
+  // side: venue_type = 'online' has no physical location and must not be pinned.
+  const location = data.venueType === 'in_person' ? data.locationFull.trim() : '';
+  if (location) {
+    const place = await searchPlace(location);
+    if (place) {
+      form.append('latitude', String(place.latitude));
+      form.append('longitude', String(place.longitude));
+    }
+  }
+  // Normalised, not raw (LOOP-282): "evenue.net/mha" goes over as
+  // "https://evenue.net/mha". The server applies the same rule, so this is
+  // belt-and-braces -- but it means the stored value is exactly what the
+  // inline hint promised. onPost has already refused an invalid link.
+  appendOptional(form, 'rsvp_url', toExternalHttpUrl(data.rsvpUrl));
+  if (data.discoveryBucket) form.append('discoveryBucket', data.discoveryBucket);
+  if (data.eventType) form.append('event_type', data.eventType);
+  if (data.benefits.length > 0) {
+    form.append('benefits', JSON.stringify(data.benefits));
+  }
+  if (data.interestTags.length > 0) {
+    form.append('categories', JSON.stringify(data.interestTags));
+  }
+
+  await appendImageToForm(form, data);
+
+  return form;
+}
+
+function getCreateEventErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message === 'AUTH_REQUIRED') {
+    return 'Please sign in before posting an event.';
+  }
+  if (error instanceof Error && error.message === 'MISSING_REQUIRED_FIELDS') {
+    return 'Add an event title and start time before posting.';
+  }
+  if (error instanceof Error && error.message === 'IMAGE_READ_FAILED') {
+    return 'Could not read the selected image. Try choosing it again.';
+  }
+  if (error instanceof ApiError) {
+    if (error.status === 401) return 'Please sign in again before posting this event.';
+    if (error.body && typeof error.body === 'object' && 'fields' in error.body) {
+      const fields = (error.body as { fields?: Record<string, string> }).fields;
+      const firstError = fields ? Object.values(fields)[0] : null;
+      if (firstError) return firstError;
+    }
+    return error.message;
+  }
+  return 'Something went wrong while posting your event. Please try again.';
+}
+
+export default function OptionalExtras() {
+  const router = useRouter();
+  const colors = useThemeColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const { data, update, reset, goBack, setPreviewing } = useCreateEvent();
+  const { data: onboarding } = useOnboarding();
+  const queryClient = useQueryClient();
+  const [removePressed, setRemovePressed] = useState(false);
+  const token = onboarding.token || null;
+
+  const createEvent = useMutation<CreateEventResponse>({
+    mutationFn: async () => {
+      if (!token) throw new Error('AUTH_REQUIRED');
+      if (!data.title.trim() || !data.startDatetime) throw new Error('MISSING_REQUIRED_FIELDS');
+      const form = await buildCreateEventForm(data);
+      return api.postForm<CreateEventResponse>('/events/create', form, {
+        token,
+      });
+    },
+    onSuccess: async () => {
+      const postedAsOrgId = data.poster?.kind === 'org' ? data.poster.id : null;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: eventsKeys.lists() }),
+        queryClient.invalidateQueries({ queryKey: feedKeys.all }),
+        // The profile's Posted grid reads /users/me/events, which is keyed
+        // under `user` -- not `events`. Without this the event you just posted
+        // is missing from your own profile until something else happens to
+        // refetch, and the modal's "View Event in Profile" lands on a grid
+        // that does not have it. myEventsAll is the prefix, so every
+        // tab/search/filter combination in the cache goes at once.
+        queryClient.invalidateQueries({ queryKey: userKeys.myEventsAll() }),
+        // Same argument for the org console when the event was posted as an
+        // org (LOOP-281): its Events tab, its public profile grid and its
+        // analytics all cache per search/filter/sort combination, so each goes
+        // by prefix. Without this the console only picks the event up on the
+        // next cold fetch, which reads as the event having not been created.
+        ...(postedAsOrgId
+          ? [
+              queryClient.invalidateQueries({ queryKey: orgKeys.eventsAll(postedAsOrgId) }),
+              queryClient.invalidateQueries({ queryKey: orgKeys.publicEventsAll(postedAsOrgId) }),
+              queryClient.invalidateQueries({ queryKey: orgKeys.analyticsAll(postedAsOrgId) }),
+              queryClient.invalidateQueries({ queryKey: orgKeys.mine() }),
+            ]
+          : []),
+      ]);
+      reset();
+      router.replace('/(tabs)/home?justPostedEvent=1');
+    },
+    onError: (error) => {
+      if (__DEV__) {
+        console.error('Create event failed', error);
+      }
+      Alert.alert('Could not post event', getCreateEventErrorMessage(error));
+    },
+  });
+
+  const onUpload = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert(
+        'Photo access needed',
+        'Enable photo library access in Settings to upload a flyer.',
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [16, 9],
+      quality: 0.85,
+    });
+
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    if (asset?.uri) {
+      update({
+        imageUrl: asset.uri,
+        imageName: asset.fileName ?? null,
+        imageMimeType: asset.mimeType ?? null,
+      });
+    }
+  };
+
+  // Opens EventPreview over the wizard. No validation gate: previewing an
+  // unfinished draft is the point, and the preview fills gaps with the same
+  // placeholders the real page would show.
+  const onPreview = () => setPreviewing(true);
+
+  const onPost = () => {
+    if (createEvent.isPending) return;
+    if (!token) {
+      Alert.alert('Sign in required', 'Please sign in before posting an event.');
+      return;
+    }
+    if (!data.title.trim() || !data.startDatetime) {
+      Alert.alert('Missing details', 'Add an event title and start time before posting.');
+      return;
+    }
+    // The hint under the field already says what's wrong; this stops a post
+    // that would otherwise 400 on the same rule server-side.
+    const rsvp = checkExternalUrlInput(data.rsvpUrl);
+    if (rsvp.kind === 'invalid') {
+      Alert.alert('Check the RSVP link', rsvp.reason);
+      return;
+    }
+    createEvent.mutate();
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.header}>
+            <TouchableOpacity onPress={goBack} hitSlop={12}>
+              <Text style={styles.backArrow}>←</Text>
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Create an Event</Text>
+            <View style={styles.headerSpacer} />
+          </View>
+
+          <View style={styles.stepBlock}>
+            <Text style={styles.stepLabel}>STEP 6 OF 6</Text>
+            <Text style={styles.stepTitle}>Optional Extras</Text>
+          </View>
+
+          <StepIndicator style={{ marginBottom: 20 }} />
+
+          {/* "All fields below are optional" stopped being true once the venue
+              type moved onto this step — that one is required and pre-answered
+              rather than blank. Saying otherwise trains people to skip the step. */}
+          <Text style={styles.instruction}>Almost done — add what makes your event shine.</Text>
+
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Flyer/Cover Image</Text>
+            {/* The tile itself re-opens the picker, which lets you swap the
+                flyer but never get back to no flyer at all. The X is the only
+                way out, so it sits over the image rather than below the tile --
+                a control that only exists once there is something to remove. */}
+            <View>
+              <TouchableOpacity
+                onPress={onUpload}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={data.imageUrl ? 'Change flyer image' : 'Upload flyer image'}
+                style={[styles.uploadTile, data.imageUrl ? styles.uploadTileFilled : null]}
+              >
+                {data.imageUrl ? (
+                  <Image
+                    source={{ uri: data.imageUrl }}
+                    style={styles.uploadImage}
+                    contentFit="cover"
+                  />
+                ) : (
+                  <View style={styles.uploadPrompt}>
+                    <ImagePlusIcon width={22} height={22} color={colors.ink} />
+                    <Text style={styles.uploadText}>Tap to Upload</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+              {data.imageUrl ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove flyer image"
+                  hitSlop={10}
+                  onPress={() => update({ imageUrl: null, imageName: null, imageMimeType: null })}
+                  onPressIn={() => setRemovePressed(true)}
+                  onPressOut={() => setRemovePressed(false)}
+                  style={[
+                    styles.removeImageButton,
+                    removePressed && styles.removeImageButtonPressed,
+                  ]}
+                >
+                  <Text style={styles.removeImageGlyph}>✕</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+
+          {/*
+            Venue type. LOOP-260 made this a hard requirement on the server, but
+            nothing in the wizard ever set it — so posting an event 400'd on a
+            field the user could not see. The server now defaults a missing value
+            to 'in_person', which unbreaks posting; this is the control that lets
+            the answer actually be true.
+
+            Single-select and always one of the two, because the column is NOT
+            NULL and "neither" is not a state an event can be in. It sits
+            directly above Location because it changes what Location means, and
+            the placeholder follows the choice — asking for "GDC 2.216" from
+            someone hosting a Zoom is how a room number ends up in a field that
+            needed a URL.
+
+            Not in the "optional" set despite the step's name: everything else
+            here can be left blank, this cannot. It reads as a normal choice
+            because it is pre-answered with the common case rather than empty.
+          */}
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Where is it?</Text>
+            <View style={styles.perkRow}>
+              {VENUE_TYPES.map((option) => {
+                const isSelected = data.venueType === option;
+                return (
+                  <TouchableOpacity
+                    key={option}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: isSelected }}
+                    accessibilityLabel={VENUE_TYPE_LABELS[option]}
+                    onPress={() => update({ venueType: option })}
+                    style={[styles.perkChip, isSelected && styles.perkChipSelected]}
+                  >
+                    <Text style={[styles.perkText, isSelected && styles.perkTextSelected]}>
+                      {VENUE_TYPE_LABELS[option]}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>
+              {data.venueType === 'online' ? 'Meeting Link' : 'Location'}
+            </Text>
+            <TextInput
+              value={data.locationFull}
+              onChangeText={(text) => update({ locationFull: text })}
+              placeholder={LOCATION_PLACEHOLDER[data.venueType]}
+              placeholderTextColor={colors.inkMuted}
+              style={styles.input}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+
+          {/* Perks. Multi-select, because an event can offer more than one and
+              the filter is an OR over the set. Options come from
+              shared/eventBenefits.ts, which is also what the HornsLink scrape
+              writes — so a user event and a scraped one answer the same
+              `?benefit=` query (LOOP-259). */}
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Perks</Text>
+            <View style={styles.perkRow}>
+              {EVENT_BENEFIT_OPTIONS.map((perk) => {
+                const isSelected = data.benefits.includes(perk);
+                return (
+                  <TouchableOpacity
+                    key={perk}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: isSelected }}
+                    accessibilityLabel={perk}
+                    onPress={() =>
+                      update({
+                        benefits: isSelected
+                          ? data.benefits.filter((b) => b !== perk)
+                          : [...data.benefits, perk],
+                      })
+                    }
+                    style={[styles.perkChip, isSelected && styles.perkChipSelected]}
+                  >
+                    <Text style={[styles.perkText, isSelected && styles.perkTextSelected]}>
+                      {perk}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>RSVP Link</Text>
+            <TextInput
+              value={data.rsvpUrl}
+              onChangeText={(text) => update({ rsvpUrl: text })}
+              placeholder="tickets.example.com/your-event"
+              placeholderTextColor={colors.inkMuted}
+              style={styles.input}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+            />
+            <UrlInputHint value={data.rsvpUrl} />
+          </View>
+
+          <View style={styles.buttonRow}>
+            <TouchableOpacity
+              onPress={onPreview}
+              activeOpacity={createEvent.isPending ? 1 : 0.85}
+              disabled={createEvent.isPending}
+              style={[styles.actionButton, styles.previewButton]}
+            >
+              <Text style={styles.previewText}>Preview Event</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={onPost}
+              activeOpacity={createEvent.isPending ? 1 : 0.85}
+              disabled={createEvent.isPending}
+              style={[
+                styles.actionButton,
+                styles.postButton,
+                createEvent.isPending && styles.actionButtonDisabled,
+              ]}
+            >
+              <Text style={styles.postText}>
+                {createEvent.isPending ? 'Posting...' : 'Post Event'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+const makeStyles = (c: ThemeColors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: c.background,
+    },
+    flex: {
+      flex: 1,
+    },
+    scroll: {
+      paddingHorizontal: 20,
+      paddingTop: 8,
+      paddingBottom: 40,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 24,
+    },
+    backArrow: {
+      fontSize: 22,
+      color: c.ink,
+    },
+    headerTitle: {
+      fontSize: 19,
+      fontWeight: '600',
+      color: c.ink,
+      letterSpacing: -0.5,
+    },
+    headerSpacer: {
+      width: 22,
+    },
+    stepBlock: {
+      marginBottom: 18,
+    },
+    stepLabel: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: c.inkSecondary,
+      letterSpacing: 1,
+      marginBottom: 6,
+    },
+    stepTitle: {
+      fontSize: 24,
+      fontWeight: '500',
+      color: c.ink,
+    },
+    instruction: {
+      fontSize: 14,
+      color: c.ink,
+      lineHeight: 20,
+      marginBottom: 24,
+    },
+    field: {
+      marginBottom: 20,
+    },
+    fieldLabel: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: c.ink,
+      marginBottom: 8,
+    },
+    uploadTile: {
+      height: 160,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: c.border,
+      borderStyle: 'dashed',
+      backgroundColor: c.surfaceMuted,
+      alignItems: 'center',
+      justifyContent: 'center',
+      overflow: 'hidden',
+    },
+    uploadTileFilled: {
+      borderStyle: 'solid',
+      backgroundColor: c.surface,
+    },
+    uploadPrompt: {
+      alignItems: 'center',
+      gap: 8,
+    },
+    uploadText: {
+      fontSize: 14,
+      color: c.ink,
+    },
+    uploadImage: {
+      width: '100%',
+      height: '100%',
+    },
+    // Dark disc, not a themed surface: this sits on top of whatever photo the
+    // user picked, and a light chip disappears against a pale flyer. Fixed in
+    // both themes for the same reason.
+    removeImageButton: {
+      position: 'absolute',
+      top: 8,
+      right: 8,
+      height: 28,
+      width: 28,
+      borderRadius: 999,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: 'rgba(0,0,0,0.55)',
+    },
+    removeImageButtonPressed: {
+      backgroundColor: 'rgba(0,0,0,0.78)',
+    },
+    removeImageGlyph: {
+      color: '#FFFFFF',
+      fontSize: 15,
+      lineHeight: 17,
+      fontWeight: '600',
+    },
+    perkRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+    },
+    perkChip: {
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: c.border,
+      backgroundColor: c.surface,
+    },
+    perkChipSelected: {
+      borderColor: c.brand,
+      backgroundColor: c.brand,
+    },
+    perkText: {
+      fontSize: 14,
+      color: c.ink,
+    },
+    perkTextSelected: {
+      color: '#FFFFFF',
+      fontWeight: '600',
+    },
+    input: {
+      backgroundColor: c.surface,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: c.border,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      fontSize: 14,
+      color: c.ink,
+    },
+    buttonRow: {
+      flexDirection: 'row',
+      gap: 12,
+      marginTop: 12,
+    },
+    actionButton: {
+      flex: 1,
+      paddingVertical: 14,
+      borderRadius: 8,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    actionButtonDisabled: {
+      opacity: 0.65,
+    },
+    previewButton: {
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.border,
+    },
+    postButton: {
+      backgroundColor: c.brand,
+    },
+    previewText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: c.ink,
+    },
+    postText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: '#FFFFFF',
+    },
+  });
